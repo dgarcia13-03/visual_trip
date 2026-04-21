@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Rosters — Visual Trip</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="app">
+  <div class="loading-wrap"><div class="spinner"></div></div>
+</div>
+<script type="module">
+  import { requireAuth, renderNavbar, apiFetch, showToast } from '/app.js';
+
+  requireAuth('admin');
+  const app = document.getElementById('app');
+  renderNavbar(app);
+
+  const main = document.createElement('div');
+  app.appendChild(main);
+
+  function esc(s) {
+    return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  async function loadPage() {
+    const [rosters, users] = await Promise.all([
+      apiFetch('/api/rosters'),
+      apiFetch('/api/rosters'), // reuse rosters; teachers from users not needed for display
+    ]);
+
+    const teacherMap = {};
+
+    main.innerHTML = `
+      <div class="page-wrap-wide">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.5rem;flex-wrap:wrap;gap:.75rem;">
+          <div style="display:flex;align-items:center;gap:1rem;">
+            <a href="/dashboard" class="btn btn-outline btn-sm">← Back</a>
+            <h1 class="page-title" style="margin:0">Class Rosters</h1>
+          </div>
+          <button class="btn btn-primary" id="add-class-btn">+ Add Class</button>
+        </div>
+
+        <div id="add-class-form" class="card" style="display:none;margin-bottom:1.5rem;">
+          <div class="section-title">New Class</div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Class Name</label>
+              <input class="form-control" id="new-class-name" placeholder="e.g. 5th Grade — Room 302">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Grade Level</label>
+              <input class="form-control" id="new-class-grade" placeholder="e.g. 5th">
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Teacher ID</label>
+            <input class="form-control" id="new-class-teacher" placeholder="Teacher user ID">
+          </div>
+          <div id="class-form-error" class="alert alert-danger" style="display:none;"></div>
+          <div style="display:flex;gap:.75rem;">
+            <button class="btn btn-primary" id="save-class-btn">Create Class</button>
+            <button class="btn btn-outline" id="cancel-class-btn">Cancel</button>
+          </div>
+        </div>
+
+        <div id="roster-list">
+          ${rosters.length === 0
+            ? '<div class="empty-state"><div style="font-size:2.5rem">📋</div><p>No classes yet.</p></div>'
+            : rosters.map(r => renderRosterCard(r)).join('')}
+        </div>
+      </div>`;
+
+    bindAddClass();
+    bindRosterCards(rosters);
+  }
+
+  function renderRosterCard(r) {
+    const studentRows = r.students.map(s => `
+      <div class="student-row" data-student-id="${s.id}">
+        <div>
+          <div>${esc(s.name)}</div>
+          <div class="student-email">${esc(s.parentEmail)}</div>
+        </div>
+        <button class="btn btn-outline btn-sm remove-student-btn" data-class-id="${r.id}" data-student-id="${s.id}">Remove</button>
+      </div>`).join('') || '<div style="font-size:.875rem;color:var(--gray-400);padding:.5rem 0">No students yet.</div>';
+
+    return `
+      <div class="roster-card" data-class-id="${r.id}">
+        <div class="roster-header" data-class-id="${r.id}">
+          <div>
+            <strong>${esc(r.className)}</strong>
+            <span class="badge badge-teacher" style="margin-left:.5rem">${esc(r.gradeLevel)}</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:.75rem;">
+            <span style="font-size:.8rem;color:var(--gray-500)">${r.students.length} students</span>
+            <span class="toggle-icon">▼</span>
+          </div>
+        </div>
+        <div class="roster-body" style="display:none;" data-body="${r.id}">
+          <div id="student-list-${r.id}">${studentRows}</div>
+          <hr class="divider">
+          <div class="section-title">Add Student</div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Student Name</label>
+              <input class="form-control add-student-name" data-class-id="${r.id}" placeholder="Full name">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Parent Email</label>
+              <input class="form-control add-student-email" data-class-id="${r.id}" placeholder="parent@example.com">
+            </div>
+          </div>
+          <button class="btn btn-primary btn-sm add-student-btn" data-class-id="${r.id}">Add Student</button>
+        </div>
+      </div>`;
+  }
+
+  function bindRosterCards(rosters) {
+    // Toggle expand
+    document.querySelectorAll('.roster-header').forEach(header => {
+      header.addEventListener('click', () => {
+        const classId = header.dataset.classId;
+        const body = document.querySelector(`[data-body="${classId}"]`);
+        const icon = header.querySelector('.toggle-icon');
+        const isOpen = body.style.display !== 'none';
+        body.style.display = isOpen ? 'none' : 'block';
+        icon.textContent = isOpen ? '▼' : '▲';
+      });
+    });
+
+    // Add student
+    document.querySelectorAll('.add-student-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const classId = btn.dataset.classId;
+        const nameInput = document.querySelector(`.add-student-name[data-class-id="${classId}"]`);
+        const emailInput = document.querySelector(`.add-student-email[data-class-id="${classId}"]`);
+        const name = nameInput.value.trim();
+        const parentEmail = emailInput.value.trim();
+        if (!name || !parentEmail) return showToast('Name and email required', 'warning');
+
+        btn.disabled = true;
+        try {
+          const student = await apiFetch(`/api/rosters/${classId}/students`, {
+            method: 'POST',
+            body: JSON.stringify({ name, parentEmail }),
+          });
+          showToast('Student added', 'success');
+          nameInput.value = '';
+          emailInput.value = '';
+          // Append new student row
+          const list = document.getElementById(`student-list-${classId}`);
+          const newRow = document.createElement('div');
+          newRow.className = 'student-row';
+          newRow.dataset.studentId = student.id;
+          newRow.innerHTML = `
+            <div>
+              <div>${esc(student.name)}</div>
+              <div class="student-email">${esc(student.parentEmail)}</div>
+            </div>
+            <button class="btn btn-outline btn-sm remove-student-btn" data-class-id="${classId}" data-student-id="${student.id}">Remove</button>`;
+          list.appendChild(newRow);
+          // Update count
+          const header = document.querySelector(`.roster-header[data-class-id="${classId}"] span`);
+          const countEl = document.querySelector(`.roster-header[data-class-id="${classId}"] .roster-count`);
+          bindRemoveBtn(newRow.querySelector('.remove-student-btn'));
+        } catch (err) {
+          showToast(err.message, 'error');
+        }
+        btn.disabled = false;
+      });
+    });
+
+    // Remove student
+    document.querySelectorAll('.remove-student-btn').forEach(bindRemoveBtn);
+  }
+
+  function bindRemoveBtn(btn) {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const { classId, studentId } = btn.dataset;
+      if (!confirm('Remove this student?')) return;
+      try {
+        await apiFetch(`/api/rosters/${classId}/students/${studentId}`, { method: 'DELETE' });
+        btn.closest('.student-row').remove();
+        showToast('Student removed', 'success');
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    });
+  }
+
+  function bindAddClass() {
+    document.getElementById('add-class-btn').addEventListener('click', () => {
+      document.getElementById('add-class-form').style.display = 'block';
+    });
+    document.getElementById('cancel-class-btn').addEventListener('click', () => {
+      document.getElementById('add-class-form').style.display = 'none';
+    });
+    document.getElementById('save-class-btn').addEventListener('click', async () => {
+      const errEl = document.getElementById('class-form-error');
+      errEl.style.display = 'none';
+      const className = document.getElementById('new-class-name').value.trim();
+      const gradeLevel = document.getElementById('new-class-grade').value.trim();
+      const teacherId = document.getElementById('new-class-teacher').value.trim();
+      if (!className || !gradeLevel || !teacherId) {
+        errEl.textContent = 'All fields are required';
+        errEl.style.display = 'block';
+        return;
+      }
+      try {
+        const cls = await apiFetch('/api/rosters', {
+          method: 'POST',
+          body: JSON.stringify({ className, gradeLevel, teacherId }),
+        });
+        showToast('Class created', 'success');
+        document.getElementById('add-class-form').style.display = 'none';
+        const list = document.getElementById('roster-list');
+        const el = document.createElement('div');
+        el.innerHTML = renderRosterCard(cls);
+        list.appendChild(el.firstElementChild);
+        bindRosterCards([cls]);
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.style.display = 'block';
+      }
+    });
+  }
+
+  try {
+    await loadPage();
+  } catch (err) {
+    main.innerHTML = `<div class="page-wrap"><div class="alert alert-danger">${err.message}</div></div>`;
+  }
+</script>
+</body>
+</html>

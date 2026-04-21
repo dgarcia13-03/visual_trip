@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sign Up — Visual Trip</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="login-wrap">
+  <div class="login-card">
+    <div class="login-logo">
+      <h1>🚌 Visual Trip</h1>
+      <p>Create your account</p>
+    </div>
+    <div class="login-error" id="signup-error"></div>
+    <form id="signup-form">
+      <div class="form-group">
+        <label class="form-label" for="name">Full Name</label>
+        <input class="form-control" id="name" type="text" placeholder="Jane Smith" required autocomplete="name">
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="email">Email</label>
+        <input class="form-control" id="email" type="email" placeholder="you@school.edu" required autocomplete="username">
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="role">I am a…</label>
+        <select class="form-control" id="role" required>
+          <option value="">— Select your role —</option>
+          <option value="teacher">Teacher</option>
+          <option value="parent">Parent / Guardian</option>
+        </select>
+        <div class="form-hint" id="role-hint"></div>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="password">Password</label>
+        <input class="form-control" id="password" type="password" placeholder="At least 6 characters" required autocomplete="new-password" minlength="6">
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="confirm">Confirm Password</label>
+        <input class="form-control" id="confirm" type="password" placeholder="Re-enter password" required autocomplete="new-password">
+      </div>
+      <button class="btn btn-primary btn-full" type="submit" id="signup-btn">Create Account</button>
+    </form>
+    <p style="text-align:center;font-size:.875rem;color:var(--gray-500);margin-top:1.25rem;">
+      Already have an account? <a href="/login">Sign in</a>
+    </p>
+  </div>
+</div>
+<script type="module">
+  import { setAuth, getAuth } from '/app.js';
+
+  if (getAuth()) location.href = '/dashboard';
+
+  const roleHints = {
+    teacher: 'Teachers can create and manage field trip requests.',
+    parent: 'Parents can sign permission forms. If your email matches a student record, you\'ll be linked automatically.',
+  };
+
+  document.getElementById('role').addEventListener('change', (e) => {
+    document.getElementById('role-hint').textContent = roleHints[e.target.value] || '';
+  });
+
+  document.getElementById('signup-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('signup-btn');
+    const errEl = document.getElementById('signup-error');
+    errEl.style.display = 'none';
+
+    const password = document.getElementById('password').value;
+    const confirm = document.getElementById('confirm').value;
+    if (password !== confirm) {
+      errEl.textContent = 'Passwords do not match.';
+      errEl.style.display = 'block';
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Creating account…';
+
+    try {
+      const res = await fetch('/api/auth/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: document.getElementById('name').value.trim(),
+          email: document.getElementById('email').value.trim(),
+          password,
+          role: document.getElementById('role').value,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Signup failed');
+      setAuth(json.data);
+      location.href = '/dashboard';
+    } catch (err) {
+      errEl.textContent = err.message;
+      errEl.style.display = 'block';
+      btn.disabled = false;
+      btn.textContent = 'Create Account';
+    }
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>New Trip — Visual Trip</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="app">
+  <div class="loading-wrap"><div class="spinner"></div></div>
+</div>
+<script type="module">
+  import { requireAuth, renderNavbar, apiFetch, showToast } from '/app.js';
+
+  requireAuth('teacher');
+  const app = document.getElementById('app');
+  renderNavbar(app);
+
+  const main = document.createElement('div');
+  app.appendChild(main);
+
+  main.innerHTML = `
+    <div class="page-wrap" style="max-width:640px">
+      <div style="display:flex;align-items:center;gap:1rem;margin-bottom:1.5rem;">
+        <a href="/dashboard" class="btn btn-outline btn-sm">← Back</a>
+        <h1 class="page-title" style="margin:0">New Trip Request</h1>
+      </div>
+      <div class="card">
+        <form id="trip-form">
+          <div class="form-group">
+            <label class="form-label" for="title">Trip Title</label>
+            <input class="form-control" id="title" type="text" placeholder="e.g. Science Museum Visit" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="destination">Destination</label>
+            <input class="form-control" id="destination" type="text" placeholder="e.g. California Science Center, Los Angeles, CA" required>
+            <div class="form-hint">Full address or location name for the map link</div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label" for="date">Trip Date &amp; Departure Time</label>
+              <input class="form-control" id="date" type="datetime-local" required>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="returnTime">Return Time</label>
+              <input class="form-control" id="returnTime" type="datetime-local" required>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="classId">Class</label>
+            <select class="form-control" id="classId" required>
+              <option value="">— Select a class —</option>
+            </select>
+          </div>
+          <div id="roster-preview" style="display:none;margin-bottom:1rem;">
+            <div class="alert alert-info" id="roster-info"></div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="notes">Additional Notes (optional)</label>
+            <textarea class="form-control" id="notes" placeholder="Any special requirements or context…"></textarea>
+          </div>
+          <div id="form-error" class="alert alert-danger" style="display:none;"></div>
+          <div style="display:flex;gap:.75rem;justify-content:flex-end;">
+            <a href="/dashboard" class="btn btn-outline">Cancel</a>
+            <button class="btn btn-primary" type="submit" id="submit-btn">Submit Request</button>
+          </div>
+        </form>
+      </div>
+    </div>`;
+
+  // Load classes for selector
+  try {
+    const rosters = await apiFetch('/api/rosters');
+    const sel = document.getElementById('classId');
+    rosters.forEach(r => {
+      const opt = document.createElement('option');
+      opt.value = r.id;
+      opt.textContent = `${r.className} (${r.students.length} students)`;
+      opt.dataset.count = r.students.length;
+      sel.appendChild(opt);
+    });
+
+    sel.addEventListener('change', () => {
+      const opt = sel.options[sel.selectedIndex];
+      const preview = document.getElementById('roster-preview');
+      const info = document.getElementById('roster-info');
+      if (opt.value) {
+        const count = Number(opt.dataset.count);
+        const buses = Math.ceil(count / 40);
+        info.textContent = `${count} students · ~${buses} bus${buses !== 1 ? 'es' : ''} estimated`;
+        preview.style.display = 'block';
+      } else {
+        preview.style.display = 'none';
+      }
+    });
+  } catch (err) {
+    showToast('Failed to load classes', 'error');
+  }
+
+  document.getElementById('trip-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('submit-btn');
+    const errEl = document.getElementById('form-error');
+    errEl.style.display = 'none';
+    btn.disabled = true;
+    btn.textContent = 'Submitting…';
+
+    try {
+      const trip = await apiFetch('/api/trips', {
+        method: 'POST',
+        body: JSON.stringify({
+          title: document.getElementById('title').value.trim(),
+          destination: document.getElementById('destination').value.trim(),
+          date: new Date(document.getElementById('date').value).toISOString(),
+          returnTime: new Date(document.getElementById('returnTime').value).toISOString(),
+          classId: document.getElementById('classId').value,
+          notes: document.getElementById('notes').value.trim(),
+        }),
+      });
+      showToast('Trip request submitted!', 'success');
+      setTimeout(() => location.href = `/trips/${trip.id}`, 800);
+    } catch (err) {
+      errEl.textContent = err.message;
+      errEl.style.display = 'block';
+      btn.disabled = false;
+      btn.textContent = 'Submit Request';
+    }
+  });
+</script>
+</body>
+</html>

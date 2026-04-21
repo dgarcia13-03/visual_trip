@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard — Visual Trip</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="app">
+  <div class="loading-wrap"><div class="spinner"></div></div>
+</div>
+<script type="module">
+  import { requireAuth, renderNavbar, apiFetch, showToast, formatDate, statusLabel } from '/app.js';
+
+  const auth = requireAuth();
+  const app = document.getElementById('app');
+
+  renderNavbar(app);
+
+  const main = document.createElement('div');
+  app.appendChild(main);
+
+  const statusClass = (s) => `badge badge-sm status-${s}`;
+
+  async function loadTeacher() {
+    main.innerHTML = `
+      <div class="page-wrap">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.5rem;flex-wrap:wrap;gap:.75rem;">
+          <h1 class="page-title" style="margin:0">My Trips</h1>
+          <a href="/trips/new" class="btn btn-primary">+ New Trip</a>
+        </div>
+        <div id="trips-list"><div class="loading-wrap"><div class="spinner"></div></div></div>
+      </div>`;
+
+    const trips = await apiFetch('/api/trips');
+    const el = document.getElementById('trips-list');
+
+    if (!trips.length) {
+      el.innerHTML = `<div class="empty-state"><div style="font-size:2.5rem">🗺️</div><p>No trips yet. Create your first trip request.</p></div>`;
+      return;
+    }
+
+    el.innerHTML = trips.map(t => `
+      <div class="trip-row" onclick="location.href='/trips/${t.id}'">
+        <div>
+          <div class="trip-row-title">${esc(t.title)}</div>
+          <div class="trip-row-meta">${esc(t.destination)} · ${formatDate(t.date)}</div>
+        </div>
+        <span class="badge ${statusClass(t.status)}">${statusLabel(t.status)}</span>
+      </div>`).join('');
+  }
+
+  async function loadAdmin() {
+    main.innerHTML = `
+      <div class="page-wrap-wide">
+        <h1 class="page-title">Admin Dashboard</h1>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:1rem;margin-bottom:1.5rem;">
+          <a href="/admin/rosters" class="card" style="text-decoration:none;display:block;">
+            <div class="card-title">📋 Manage Rosters</div>
+            <div class="card-meta">View and edit class rosters</div>
+          </a>
+          <a href="/admin/companies" class="card" style="text-decoration:none;display:block;">
+            <div class="card-title">🚌 Bus Companies</div>
+            <div class="card-meta">Manage pre-approved companies</div>
+          </a>
+        </div>
+        <h2 class="section-title">All Trip Requests</h2>
+        <div id="trips-list"><div class="loading-wrap"><div class="spinner"></div></div></div>
+      </div>`;
+
+    const trips = await apiFetch('/api/trips');
+    const el = document.getElementById('trips-list');
+
+    if (!trips.length) {
+      el.innerHTML = `<div class="empty-state"><div style="font-size:2.5rem">✅</div><p>No trip requests yet.</p></div>`;
+      return;
+    }
+
+    const sorted = [...trips].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    el.innerHTML = sorted.map(t => `
+      <div class="trip-row" onclick="location.href='/trips/${t.id}'">
+        <div>
+          <div class="trip-row-title">${esc(t.title)}</div>
+          <div class="trip-row-meta">${esc(t.destination)} · ${formatDate(t.date)}</div>
+        </div>
+        <span class="badge ${statusClass(t.status)}">${statusLabel(t.status)}</span>
+      </div>`).join('');
+  }
+
+  async function loadBusCompany() {
+    main.innerHTML = `
+      <div class="page-wrap">
+        <h1 class="page-title">Trips Needing Quotes</h1>
+        <div id="trips-list"><div class="loading-wrap"><div class="spinner"></div></div></div>
+      </div>`;
+
+    const trips = await apiFetch('/api/trips');
+    const el = document.getElementById('trips-list');
+
+    if (!trips.length) {
+      el.innerHTML = `<div class="empty-state"><div style="font-size:2.5rem">📭</div><p>No trips are currently accepting quotes.</p></div>`;
+      return;
+    }
+
+    el.innerHTML = trips.map(t => `
+      <div class="trip-row" onclick="location.href='/trips/${t.id}'">
+        <div>
+          <div class="trip-row-title">${esc(t.title)}</div>
+          <div class="trip-row-meta">${esc(t.destination)} · ${formatDate(t.date)} · ${t.students.length} students</div>
+        </div>
+        <span class="badge ${statusClass(t.status)}">${statusLabel(t.status)}</span>
+      </div>`).join('');
+  }
+
+  async function loadParent() {
+    main.innerHTML = `
+      <div class="page-wrap">
+        <h1 class="page-title">My Children's Trips</h1>
+        <div id="trips-list"><div class="loading-wrap"><div class="spinner"></div></div></div>
+      </div>`;
+
+    const trips = await apiFetch('/api/trips');
+    const el = document.getElementById('trips-list');
+
+    if (!trips.length) {
+      el.innerHTML = `<div class="empty-state"><div style="font-size:2.5rem">🎒</div><p>No upcoming trips for your child.</p></div>`;
+      return;
+    }
+
+    el.innerHTML = trips.map(t => `
+      <div class="trip-row" onclick="location.href='/trips/${t.id}'">
+        <div>
+          <div class="trip-row-title">${esc(t.title)}</div>
+          <div class="trip-row-meta">${esc(t.destination)} · ${formatDate(t.date)}</div>
+        </div>
+        <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;">
+          <span class="badge ${statusClass(t.status)}">${statusLabel(t.status)}</span>
+          ${t.status === 'approved_2' || t.status === 'confirmed'
+            ? `<a href="/trips/${t.id}/permission" class="btn btn-sm btn-primary" onclick="event.stopPropagation()">Sign Form</a>`
+            : ''}
+        </div>
+      </div>`).join('');
+  }
+
+  function esc(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  try {
+    if (auth.role === 'teacher') await loadTeacher();
+    else if (auth.role === 'admin') await loadAdmin();
+    else if (auth.role === 'bus_company') await loadBusCompany();
+    else await loadParent();
+  } catch (err) {
+    main.innerHTML = `<div class="page-wrap"><div class="alert alert-danger">${err.message}</div></div>`;
+  }
+</script>
+</body>
+</html>

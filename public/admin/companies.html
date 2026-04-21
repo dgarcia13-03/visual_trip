@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bus Companies — Visual Trip</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="app">
+  <div class="loading-wrap"><div class="spinner"></div></div>
+</div>
+<script type="module">
+  import { requireAuth, renderNavbar, apiFetch, showToast, formatDate } from '/app.js';
+
+  requireAuth('admin');
+  const app = document.getElementById('app');
+  renderNavbar(app);
+
+  const main = document.createElement('div');
+  app.appendChild(main);
+
+  function esc(s) {
+    return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  async function loadPage() {
+    const companies = await apiFetch('/api/companies');
+
+    main.innerHTML = `
+      <div class="page-wrap">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.5rem;flex-wrap:wrap;gap:.75rem;">
+          <div style="display:flex;align-items:center;gap:1rem;">
+            <a href="/dashboard" class="btn btn-outline btn-sm">← Back</a>
+            <h1 class="page-title" style="margin:0">Bus Companies</h1>
+          </div>
+          <button class="btn btn-primary" id="add-co-btn">+ Add Company</button>
+        </div>
+
+        <div id="add-co-form" class="card" style="display:none;margin-bottom:1.5rem;">
+          <div class="section-title">Add Bus Company</div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Company Name</label>
+              <input class="form-control" id="co-name" placeholder="e.g. Sunshine Transit">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Contact Email</label>
+              <input class="form-control" id="co-email" type="email" placeholder="contact@company.com">
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Phone (optional)</label>
+            <input class="form-control" id="co-phone" placeholder="555-0000">
+          </div>
+          <div class="form-hint" style="margin-bottom:.75rem;">
+            An invitation email will be simulated. The company can login with password: <code>bus123</code>
+          </div>
+          <div id="co-error" class="alert alert-danger" style="display:none;"></div>
+          <div style="display:flex;gap:.75rem;">
+            <button class="btn btn-primary" id="save-co-btn">Add Company</button>
+            <button class="btn btn-outline" id="cancel-co-btn">Cancel</button>
+          </div>
+        </div>
+
+        <div id="co-list">
+          ${companies.length === 0
+            ? '<div class="empty-state"><div style="font-size:2.5rem">🚌</div><p>No bus companies yet.</p></div>'
+            : companies.map(renderCompanyCard).join('')}
+        </div>
+      </div>`;
+
+    bindAddCompany();
+    bindDeleteButtons();
+  }
+
+  function renderCompanyCard(c) {
+    return `
+      <div class="card card-row" data-company-id="${c.id}" style="margin-bottom:.75rem;">
+        <div>
+          <div class="card-title" style="margin-bottom:.25rem;">🚌 ${esc(c.name)}</div>
+          <div class="card-meta">
+            📧 ${esc(c.contactEmail)}
+            ${c.phone ? ` · 📞 ${esc(c.phone)}` : ''}
+          </div>
+          <div class="card-meta" style="margin-top:.25rem;">Added ${formatDate(c.createdAt)}</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;">
+          ${c.preApproved ? '<span class="badge badge-signed">Pre-approved</span>' : ''}
+          <button class="btn btn-danger btn-sm delete-co-btn" data-company-id="${c.id}">Remove</button>
+        </div>
+      </div>`;
+  }
+
+  function bindAddCompany() {
+    document.getElementById('add-co-btn').addEventListener('click', () => {
+      document.getElementById('add-co-form').style.display = 'block';
+    });
+    document.getElementById('cancel-co-btn').addEventListener('click', () => {
+      document.getElementById('add-co-form').style.display = 'none';
+    });
+    document.getElementById('save-co-btn').addEventListener('click', async () => {
+      const errEl = document.getElementById('co-error');
+      errEl.style.display = 'none';
+      const name = document.getElementById('co-name').value.trim();
+      const contactEmail = document.getElementById('co-email').value.trim();
+      const phone = document.getElementById('co-phone').value.trim();
+      if (!name || !contactEmail) {
+        errEl.textContent = 'Name and email are required';
+        errEl.style.display = 'block';
+        return;
+      }
+      const btn = document.getElementById('save-co-btn');
+      btn.disabled = true;
+      try {
+        const company = await apiFetch('/api/companies', {
+          method: 'POST',
+          body: JSON.stringify({ name, contactEmail, phone }),
+        });
+        showToast('Company added! Invitation simulated.', 'success');
+        document.getElementById('add-co-form').style.display = 'none';
+        document.getElementById('co-name').value = '';
+        document.getElementById('co-email').value = '';
+        document.getElementById('co-phone').value = '';
+        const list = document.getElementById('co-list');
+        const el = document.createElement('div');
+        el.innerHTML = renderCompanyCard(company);
+        list.appendChild(el.firstElementChild);
+        bindDeleteButtons();
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.style.display = 'block';
+      }
+      btn.disabled = false;
+    });
+  }
+
+  function bindDeleteButtons() {
+    document.querySelectorAll('.delete-co-btn').forEach(btn => {
+      // Prevent double-binding
+      if (btn.dataset.bound) return;
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', async () => {
+        if (!confirm('Remove this bus company?')) return;
+        const id = btn.dataset.companyId;
+        try {
+          await apiFetch(`/api/companies/${id}`, { method: 'DELETE' });
+          btn.closest('.card').remove();
+          showToast('Company removed', 'success');
+          const list = document.getElementById('co-list');
+          if (!list.querySelector('.card')) {
+            list.innerHTML = '<div class="empty-state"><div style="font-size:2.5rem">🚌</div><p>No bus companies yet.</p></div>';
+          }
+        } catch (err) {
+          showToast(err.message, 'error');
+        }
+      });
+    });
+  }
+
+  try {
+    await loadPage();
+  } catch (err) {
+    main.innerHTML = `<div class="page-wrap"><div class="alert alert-danger">${err.message}</div></div>`;
+  }
+</script>
+</body>
+</html>

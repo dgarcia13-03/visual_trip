@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Permission Form — Visual Trip</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="app">
+  <div class="loading-wrap"><div class="spinner"></div></div>
+</div>
+<script type="module">
+  import { getAuth, renderNavbar, apiFetch, showToast, formatDate, formatDateTime, getIdFromPath } from '/app.js';
+
+  const auth = getAuth();
+  const tripId = getIdFromPath(1);
+  const app = document.getElementById('app');
+
+  if (auth) renderNavbar(app);
+
+  const main = document.createElement('div');
+  app.appendChild(main);
+
+  function esc(s) {
+    return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  let sigCanvas, sigCtx, drawing = false, hasSig = false;
+
+  async function loadPage() {
+    let trip;
+    try {
+      if (auth) {
+        trip = await apiFetch(`/api/trips/${tripId}`);
+      } else {
+        const res = await fetch(`/api/trips/${tripId}`);
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error);
+        trip = json.data;
+      }
+    } catch {
+      main.innerHTML = `<div class="page-wrap"><div class="alert alert-danger">Trip not found or access denied.</div></div>`;
+      return;
+    }
+
+    // For parent role, pre-fill student options
+    let studentOptions = '';
+    if (auth?.role === 'parent') {
+      const users = await apiFetch('/api/rosters').catch(() => []);
+      const cls = users.find(r => r.id === trip.classId);
+      if (cls) {
+        const parentData = JSON.parse(localStorage.getItem('vt_auth'));
+        const userData = await apiFetch('/api/rosters').catch(() => []);
+        // Build all rosters' students list to match parent's studentIds
+        const allStudents = userData.flatMap(r => r.students);
+        // We'll just show the class students and let them pick
+        studentOptions = cls.students.map(s =>
+          `<option value="${s.id}">${esc(s.name)}</option>`
+        ).join('');
+      }
+    }
+
+    if (!studentOptions) {
+      // Fallback: load class roster
+      try {
+        const rosters = auth
+          ? await apiFetch('/api/rosters')
+          : await fetch('/api/rosters').then(r => r.json()).then(j => j.data || []);
+        const cls = rosters.find(r => r.id === trip.classId);
+        if (cls) {
+          studentOptions = cls.students.map(s =>
+            `<option value="${s.id}">${esc(s.name)}</option>`
+          ).join('');
+        }
+      } catch { /* ignore */ }
+    }
+
+    document.title = `Permission Form: ${trip.title} — Visual Trip`;
+
+    main.innerHTML = `
+      <div class="page-wrap" style="max-width:580px">
+        <div class="card" style="margin-bottom:1rem">
+          <div class="card-title" style="font-size:1.15rem">🎒 ${esc(trip.title)}</div>
+          <div class="trip-meta" style="margin-top:.5rem">
+            <span>📍 ${esc(trip.destination)}</span>
+            <span>📅 ${formatDate(trip.date)}</span>
+            <span>🕐 Return: ${formatDateTime(trip.returnTime)}</span>
+            <span>👥 ${trip.students.length} students</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="section-title">Permission Form</div>
+          <form id="perm-form">
+            <div class="form-group">
+              <label class="form-label" for="student-id">Student</label>
+              <select class="form-control" id="student-id" required>
+                <option value="">— Select your child —</option>
+                ${studentOptions}
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="parent-name">Parent / Guardian Name</label>
+              <input class="form-control" id="parent-name" type="text" required placeholder="Your full name">
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="parent-email">Parent / Guardian Email</label>
+              <input class="form-control" id="parent-email" type="email" required placeholder="you@example.com">
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Signature</label>
+              <div class="sig-wrap" id="sig-wrap">
+                <canvas id="sig-canvas" width="540" height="160"></canvas>
+                <div class="sig-hint" id="sig-hint">Sign here with mouse or finger</div>
+              </div>
+              <div style="display:flex;gap:.5rem;margin-top:.4rem;">
+                <button type="button" class="btn btn-outline btn-sm" id="clear-sig">Clear</button>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label style="display:flex;align-items:center;gap:.75rem;cursor:pointer;font-size:.9rem;">
+                <input type="checkbox" id="chaperone" style="width:18px;height:18px;accent-color:var(--primary);">
+                I am available and willing to chaperone this trip
+              </label>
+            </div>
+
+            <div id="perm-error" class="alert alert-danger" style="display:none;"></div>
+            <div id="perm-success" class="alert alert-success" style="display:none;"></div>
+
+            <button class="btn btn-primary btn-full" type="submit" id="perm-submit">Submit Permission Form</button>
+          </form>
+        </div>
+      </div>`;
+
+    initSignaturePad();
+    bindForm(tripId);
+  }
+
+  function initSignaturePad() {
+    sigCanvas = document.getElementById('sig-canvas');
+    sigCtx = sigCanvas.getContext('2d');
+
+    // Resize canvas to match display size
+    const wrap = document.getElementById('sig-wrap');
+    const dpr = window.devicePixelRatio || 1;
+    const w = wrap.clientWidth;
+    sigCanvas.width = w * dpr;
+    sigCanvas.height = 160 * dpr;
+    sigCanvas.style.width = w + 'px';
+    sigCanvas.style.height = '160px';
+    sigCtx.scale(dpr, dpr);
+
+    sigCtx.strokeStyle = '#1f2937';
+    sigCtx.lineWidth = 2;
+    sigCtx.lineCap = 'round';
+    sigCtx.lineJoin = 'round';
+
+    const getPos = (e) => {
+      const rect = sigCanvas.getBoundingClientRect();
+      const src = e.touches ? e.touches[0] : e;
+      return { x: src.clientX - rect.left, y: src.clientY - rect.top };
+    };
+
+    sigCanvas.addEventListener('mousedown', (e) => {
+      drawing = true;
+      const p = getPos(e);
+      sigCtx.beginPath();
+      sigCtx.moveTo(p.x, p.y);
+    });
+    sigCanvas.addEventListener('mousemove', (e) => {
+      if (!drawing) return;
+      const p = getPos(e);
+      sigCtx.lineTo(p.x, p.y);
+      sigCtx.stroke();
+      hasSig = true;
+      document.getElementById('sig-hint').style.display = 'none';
+    });
+    sigCanvas.addEventListener('mouseup', () => { drawing = false; });
+    sigCanvas.addEventListener('mouseleave', () => { drawing = false; });
+
+    sigCanvas.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      drawing = true;
+      const p = getPos(e);
+      sigCtx.beginPath();
+      sigCtx.moveTo(p.x, p.y);
+    }, { passive: false });
+    sigCanvas.addEventListener('touchmove', (e) => {
+      e.preventDefault();
+      if (!drawing) return;
+      const p = getPos(e);
+      sigCtx.lineTo(p.x, p.y);
+      sigCtx.stroke();
+      hasSig = true;
+      document.getElementById('sig-hint').style.display = 'none';
+    }, { passive: false });
+    sigCanvas.addEventListener('touchend', () => { drawing = false; });
+
+    document.getElementById('clear-sig').addEventListener('click', () => {
+      sigCtx.clearRect(0, 0, sigCanvas.width, sigCanvas.height);
+      hasSig = false;
+      document.getElementById('sig-hint').style.display = '';
+    });
+  }
+
+  function bindForm(tripId) {
+    document.getElementById('perm-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errEl = document.getElementById('perm-error');
+      const successEl = document.getElementById('perm-success');
+      const btn = document.getElementById('perm-submit');
+      errEl.style.display = 'none';
+
+      if (!hasSig) {
+        errEl.textContent = 'Please sign the form before submitting.';
+        errEl.style.display = 'block';
+        return;
+      }
+
+      btn.disabled = true; btn.textContent = 'Submitting…';
+
+      try {
+        const signatureDataUrl = sigCanvas.toDataURL('image/png');
+        const body = {
+          studentId: document.getElementById('student-id').value,
+          parentName: document.getElementById('parent-name').value.trim(),
+          parentEmail: document.getElementById('parent-email').value.trim(),
+          signatureDataUrl,
+          chaperoneOptIn: document.getElementById('chaperone').checked,
+        };
+
+        const fetchFn = auth
+          ? () => apiFetch(`/api/trips/${tripId}/permissions`, { method: 'POST', body: JSON.stringify(body) })
+          : () => fetch(`/api/trips/${tripId}/permissions`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body),
+            }).then(r => r.json()).then(j => { if (j.error) throw new Error(j.error); return j.data; });
+
+        await fetchFn();
+        successEl.textContent = '✅ Permission form submitted successfully! Thank you.';
+        successEl.style.display = 'block';
+        document.getElementById('perm-form').style.display = 'none';
+        showToast('Form submitted!', 'success');
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.style.display = 'block';
+        btn.disabled = false; btn.textContent = 'Submit Permission Form';
+      }
+    });
+  }
+
+  await loadPage();
+</script>
+</body>
+</html>

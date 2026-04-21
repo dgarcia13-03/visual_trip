@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Trip Detail — Visual Trip</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="app">
+  <div class="loading-wrap"><div class="spinner"></div></div>
+</div>
+
+<!-- Reject modal -->
+<div id="reject-modal" class="modal-overlay" style="display:none;">
+  <div class="modal">
+    <div class="modal-title">Reject Trip Request</div>
+    <div class="form-group">
+      <label class="form-label" for="reject-notes">Notes for teacher</label>
+      <textarea class="form-control" id="reject-notes" placeholder="Explain why this trip is being rejected…"></textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" id="reject-cancel">Cancel</button>
+      <button class="btn btn-danger" id="reject-confirm">Reject Trip</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { requireAuth, renderNavbar, apiFetch, showToast, formatDate, formatDateTime, statusLabel, getIdFromPath } from '/app.js';
+
+  const auth = requireAuth();
+  const tripId = getIdFromPath(1);
+  const app = document.getElementById('app');
+  renderNavbar(app);
+
+  const main = document.createElement('div');
+  app.appendChild(main);
+
+  function esc(s) {
+    return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  const PIPELINE = [
+    { key: 'pending', label: 'Submitted' },
+    { key: 'approved_1', label: 'Approved' },
+    { key: 'quoted', label: 'Quoted' },
+    { key: 'approved_2', label: 'Quote\nSelected' },
+    { key: 'confirmed', label: 'Confirmed' },
+  ];
+
+  function renderPipeline(status) {
+    if (status === 'rejected') {
+      return `<div class="pipeline">
+        ${PIPELINE.map(s => `
+          <div class="pipeline-step rejected">
+            <div class="pipeline-dot">✕</div>
+            <div class="pipeline-label">${s.label}</div>
+          </div>`).join('')}
+      </div>
+      <div class="alert alert-danger" style="margin-bottom:1rem">This trip was rejected.</div>`;
+    }
+
+    const idx = PIPELINE.findIndex(s => s.key === status);
+    return `<div class="pipeline">
+      ${PIPELINE.map((s, i) => {
+        const cls = i < idx ? 'done' : i === idx ? 'active' : '';
+        const dot = i < idx ? '✓' : i + 1;
+        return `<div class="pipeline-step ${cls}">
+          <div class="pipeline-dot">${dot}</div>
+          <div class="pipeline-label">${s.label}</div>
+        </div>`;
+      }).join('')}
+    </div>`;
+  }
+
+  async function loadPage() {
+    const [trip, permStatus] = await Promise.all([
+      apiFetch(`/api/trips/${tripId}`),
+      apiFetch(`/api/trips/${tripId}/permissions/status`).catch(() => null),
+    ]);
+
+    document.title = `${trip.title} — Visual Trip`;
+
+    let panels = '';
+
+    // ── Teacher panels ────────────────────────────────────────────────────────
+    if (auth.role === 'teacher') {
+      panels += renderChecklist(trip);
+      if (['approved_2', 'confirmed'].includes(trip.status) && permStatus) {
+        panels += renderPermissionStatus(permStatus, tripId);
+      }
+    }
+
+    // ── Admin panels ──────────────────────────────────────────────────────────
+    if (auth.role === 'admin') {
+      if (trip.status === 'pending') {
+        panels += `
+          <div class="card" style="margin-bottom:1rem">
+            <div class="section-title">Admin Actions</div>
+            <div style="display:flex;gap:.75rem;flex-wrap:wrap;">
+              <button class="btn btn-success" id="approve1-btn">✓ Approve &amp; Request Quotes</button>
+              <button class="btn btn-danger" id="reject-btn">✕ Reject</button>
+            </div>
+          </div>`;
+      }
+      if (['approved_1', 'quoted'].includes(trip.status)) {
+        panels += await renderQuotePanel(trip);
+      }
+      if (['approved_2', 'confirmed'].includes(trip.status) && permStatus) {
+        panels += renderPermissionStatus(permStatus, tripId);
+      }
+    }
+
+    // ── Bus company panel ─────────────────────────────────────────────────────
+    if (auth.role === 'bus_company' && ['approved_1', 'quoted'].includes(trip.status)) {
+      panels += renderQuoteForm();
+    }
+
+    // ── Parent panel ──────────────────────────────────────────────────────────
+    if (auth.role === 'parent' && ['approved_2', 'confirmed'].includes(trip.status)) {
+      panels += `
+        <div class="card" style="margin-bottom:1rem">
+          <div class="card-title">Permission Form</div>
+          <p style="font-size:.875rem;color:var(--gray-600);margin-bottom:1rem;">
+            This trip has been confirmed. Please sign the permission form for your child.
+          </p>
+          <a href="/trips/${tripId}/permission" class="btn btn-primary">Sign Permission Form →</a>
+        </div>`;
+    }
+
+    main.innerHTML = `
+      <div class="page-wrap">
+        <div style="display:flex;align-items:center;gap:1rem;margin-bottom:1.5rem;flex-wrap:wrap;">
+          <a href="/dashboard" class="btn btn-outline btn-sm">← Back</a>
+          <h1 class="page-title" style="margin:0">${esc(trip.title)}</h1>
+          <span class="badge status-${trip.status}">${statusLabel(trip.status)}</span>
+        </div>
+
+        ${renderPipeline(trip.status)}
+
+        <div class="card" style="margin-bottom:1rem">
+          <div class="trip-meta">
+            <span>📍 ${esc(trip.destination)}</span>
+            <span>📅 ${formatDate(trip.date)}</span>
+            <span>🕐 Return: ${formatDateTime(trip.returnTime)}</span>
+            <span>👥 ${trip.students.length} students</span>
+          </div>
+          ${trip.adminNotes ? `<div class="alert alert-info" style="margin-top:.5rem"><strong>Notes:</strong> ${esc(trip.adminNotes)}</div>` : ''}
+          <div class="route-card">
+            <span>🗺️ <strong>${trip.routeSuggestion.distanceMiles} miles</strong> estimated</span>
+            <span>🚌 ~<strong>${trip.routeSuggestion.estimatedBuses}</strong> bus(es)</span>
+            <a href="${trip.routeSuggestion.mapUrl}" target="_blank" rel="noopener">View on Google Maps ↗</a>
+          </div>
+        </div>
+
+        ${panels}
+      </div>`;
+
+    // Bind admin approve-1
+    document.getElementById('approve1-btn')?.addEventListener('click', async () => {
+      const btn = document.getElementById('approve1-btn');
+      btn.disabled = true; btn.textContent = 'Approving…';
+      try {
+        await apiFetch(`/api/trips/${tripId}/approve-1`, { method: 'PATCH' });
+        showToast('Trip approved! Bus companies notified.', 'success');
+        setTimeout(() => location.reload(), 800);
+      } catch (err) {
+        showToast(err.message, 'error');
+        btn.disabled = false; btn.textContent = '✓ Approve & Request Quotes';
+      }
+    });
+
+    // Bind reject modal
+    document.getElementById('reject-btn')?.addEventListener('click', () => {
+      document.getElementById('reject-modal').style.display = 'flex';
+    });
+    document.getElementById('reject-cancel')?.addEventListener('click', () => {
+      document.getElementById('reject-modal').style.display = 'none';
+    });
+    document.getElementById('reject-confirm')?.addEventListener('click', async () => {
+      const notes = document.getElementById('reject-notes').value;
+      try {
+        await apiFetch(`/api/trips/${tripId}/reject`, {
+          method: 'PATCH',
+          body: JSON.stringify({ notes }),
+        });
+        document.getElementById('reject-modal').style.display = 'none';
+        showToast('Trip rejected.', 'warning');
+        setTimeout(() => location.reload(), 800);
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    });
+
+    // Bind select-quote buttons
+    document.querySelectorAll('.select-quote-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const quoteId = btn.dataset.quoteId;
+        btn.disabled = true; btn.textContent = 'Selecting…';
+        try {
+          await apiFetch(`/api/trips/${tripId}/approve-2`, {
+            method: 'PATCH',
+            body: JSON.stringify({ quoteId }),
+          });
+          showToast('Quote selected! Parents will be notified.', 'success');
+          setTimeout(() => location.reload(), 800);
+        } catch (err) {
+          showToast(err.message, 'error');
+          btn.disabled = false; btn.textContent = 'Select This Quote';
+        }
+      });
+    });
+
+    // Bind checklist
+    bindChecklist(trip);
+
+    // Bind quote form
+    bindQuoteForm(tripId);
+  }
+
+  function renderChecklist(trip) {
+    const items = trip.checklist.map((item, i) => `
+      <li class="checklist-item ${item.completed ? 'done' : ''}" data-index="${i}">
+        <input type="checkbox" id="chk-${i}" ${item.completed ? 'checked' : ''}>
+        <label for="chk-${i}">${esc(item.item)}</label>
+        ${item.custom ? `<button class="btn btn-outline btn-sm remove-chk" data-index="${i}">✕</button>` : ''}
+      </li>`).join('');
+
+    return `
+      <div class="card" style="margin-bottom:1rem">
+        <div class="section-title">Planning Checklist</div>
+        <ul class="checklist" id="checklist">${items}</ul>
+        <div class="checklist-add">
+          <input class="form-control" id="new-chk-item" placeholder="Add custom item…">
+          <button class="btn btn-outline" id="add-chk-btn">Add</button>
+        </div>
+      </div>`;
+  }
+
+  function bindChecklist(trip) {
+    const list = document.getElementById('checklist');
+    if (!list) return;
+
+    let checklist = [...trip.checklist];
+
+    async function save() {
+      try {
+        await apiFetch(`/api/trips/${tripId}/checklist`, {
+          method: 'PATCH',
+          body: JSON.stringify({ checklist }),
+        });
+      } catch (err) {
+        showToast('Failed to save checklist', 'error');
+      }
+    }
+
+    list.addEventListener('change', async (e) => {
+      if (e.target.type !== 'checkbox') return;
+      const idx = Number(e.target.closest('.checklist-item').dataset.index);
+      checklist[idx].completed = e.target.checked;
+      e.target.closest('.checklist-item').classList.toggle('done', e.target.checked);
+      await save();
+    });
+
+    list.addEventListener('click', async (e) => {
+      if (!e.target.classList.contains('remove-chk')) return;
+      const idx = Number(e.target.dataset.index);
+      checklist.splice(idx, 1);
+      await save();
+      location.reload();
+    });
+
+    document.getElementById('add-chk-btn')?.addEventListener('click', async () => {
+      const input = document.getElementById('new-chk-item');
+      const text = input.value.trim();
+      if (!text) return;
+      checklist.push({ item: text, completed: false, custom: true });
+      await save();
+      input.value = '';
+      location.reload();
+    });
+  }
+
+  async function renderQuotePanel(trip) {
+    const quotes = await apiFetch(`/api/trips/${tripId}/quotes`).catch(() => []);
+    const companies = await apiFetch('/api/companies').catch(() => []);
+    const companyMap = Object.fromEntries(companies.map(c => [c.id, c]));
+
+    if (!quotes.length) {
+      return `
+        <div class="card" style="margin-bottom:1rem">
+          <div class="section-title">Quotes</div>
+          <div class="empty-state" style="padding:1.5rem 0">
+            <p>Waiting for bus companies to submit quotes.</p>
+          </div>
+        </div>`;
+    }
+
+    const cards = quotes.map(q => {
+      const co = companyMap[q.companyId];
+      const isSelected = trip.selectedQuoteId === q.id;
+      return `
+        <div class="quote-card ${isSelected ? 'selected' : ''} ${!q.availability ? 'unavailable' : ''}">
+          ${isSelected ? '<div class="badge badge-signed" style="margin-bottom:.5rem">Selected</div>' : ''}
+          <div class="quote-price">$${q.price.toLocaleString()}</div>
+          <div class="quote-detail">🚌 ${q.busCount} bus(es) · ${q.busCapacity} capacity each</div>
+          <div class="quote-detail">🏢 ${esc(co?.name || 'Unknown')}</div>
+          <div class="quote-detail">✅ ${q.availability ? 'Available' : '❌ Not available'}</div>
+          ${q.notes ? `<div class="quote-detail" style="margin-top:.5rem;font-style:italic;">"${esc(q.notes)}"</div>` : ''}
+          ${trip.status !== 'approved_2' && q.availability
+            ? `<button class="btn btn-primary btn-sm select-quote-btn" style="margin-top:.75rem;width:100%" data-quote-id="${q.id}">Select This Quote</button>`
+            : ''}
+        </div>`;
+    }).join('');
+
+    return `
+      <div class="card" style="margin-bottom:1rem">
+        <div class="section-title">Quotes (${quotes.length})</div>
+        <div class="quotes-grid">${cards}</div>
+      </div>`;
+  }
+
+  function renderQuoteForm() {
+    return `
+      <div class="card" style="margin-bottom:1rem">
+        <div class="section-title">Submit Your Quote</div>
+        <form id="quote-form">
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label" for="q-price">Total Price ($)</label>
+              <input class="form-control" id="q-price" type="number" min="0" step="0.01" required>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="q-buscount">Number of Buses</label>
+              <input class="form-control" id="q-buscount" type="number" min="1" required>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label" for="q-capacity">Capacity per Bus</label>
+              <input class="form-control" id="q-capacity" type="number" min="1" required>
+            </div>
+            <div class="form-group" style="display:flex;align-items:flex-end;padding-bottom:.15rem;">
+              <label style="display:flex;align-items:center;gap:.5rem;font-size:.875rem;cursor:pointer;">
+                <input type="checkbox" id="q-avail" checked style="width:18px;height:18px;accent-color:var(--primary);">
+                Available for this date
+              </label>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="q-notes">Notes (optional)</label>
+            <textarea class="form-control" id="q-notes" placeholder="Any special terms or conditions…"></textarea>
+          </div>
+          <div id="quote-error" class="alert alert-danger" style="display:none;"></div>
+          <button class="btn btn-primary" type="submit" id="quote-submit-btn">Submit Quote</button>
+        </form>
+      </div>`;
+  }
+
+  function bindQuoteForm(tripId) {
+    const form = document.getElementById('quote-form');
+    if (!form) return;
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const btn = document.getElementById('quote-submit-btn');
+      const errEl = document.getElementById('quote-error');
+      errEl.style.display = 'none';
+      btn.disabled = true; btn.textContent = 'Submitting…';
+      try {
+        await apiFetch(`/api/trips/${tripId}/quotes`, {
+          method: 'POST',
+          body: JSON.stringify({
+            price: document.getElementById('q-price').value,
+            busCount: document.getElementById('q-buscount').value,
+            busCapacity: document.getElementById('q-capacity').value,
+            availability: document.getElementById('q-avail').checked,
+            notes: document.getElementById('q-notes').value,
+          }),
+        });
+        showToast('Quote submitted!', 'success');
+        setTimeout(() => location.reload(), 800);
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.style.display = 'block';
+        btn.disabled = false; btn.textContent = 'Submit Quote';
+      }
+    });
+  }
+
+  function renderPermissionStatus(status, tripId) {
+    const rows = status.students.map(s => `
+      <tr>
+        <td>${esc(s.studentName)}</td>
+        <td>${esc(s.parentEmail)}</td>
+        <td>
+          ${s.signed
+            ? `<span class="badge badge-signed">Signed</span>`
+            : `<span class="badge badge-unsigned">Unsigned</span>`}
+        </td>
+        <td>
+          ${s.chaperoneOptIn ? `<span class="badge badge-chaperone">Chaperone</span>` : '—'}
+        </td>
+      </tr>`).join('');
+
+    return `
+      <div class="card" style="margin-bottom:1rem">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem;flex-wrap:wrap;gap:.5rem;">
+          <div class="section-title" style="margin:0">Permission Forms</div>
+          <div style="font-size:.875rem;color:var(--gray-600);">
+            <span style="color:var(--success);font-weight:600">${status.signed} signed</span>
+            · ${status.unsigned} unsigned · ${status.total} total
+          </div>
+        </div>
+        <div style="overflow-x:auto;">
+          <table class="perm-table">
+            <thead>
+              <tr>
+                <th>Student</th>
+                <th>Parent Email</th>
+                <th>Status</th>
+                <th>Chaperone</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </div>`;
+  }
+
+  try {
+    await loadPage();
+  } catch (err) {
+    main.innerHTML = `<div class="page-wrap"><div class="alert alert-danger">${esc(err.message)}</div></div>`;
+  }
+</script>
+</body>
+</html>
