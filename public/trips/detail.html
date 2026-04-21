@@ -75,9 +75,10 @@
   }
 
   async function loadPage() {
-    const [trip, permStatus] = await Promise.all([
+    const [trip, permStatus, counselorStatus] = await Promise.all([
       apiFetch(`/api/trips/${tripId}`),
       apiFetch(`/api/trips/${tripId}/permissions/status`).catch(() => null),
+      apiFetch(`/api/trips/${tripId}/counselor-signatures/status`).catch(() => null),
     ]);
 
     document.title = `${trip.title} — Visual Trip`;
@@ -135,6 +136,7 @@
           <a href="/dashboard" class="btn btn-outline btn-sm">← Back</a>
           <h1 class="page-title" style="margin:0">${esc(trip.title)}</h1>
           <span class="badge status-${trip.status}">${statusLabel(trip.status)}</span>
+          ${auth.role === 'admin' ? `<a href="/trips/${tripId}/report" class="btn btn-outline btn-sm" style="margin-left:auto">📋 Full Report</a>` : ''}
         </div>
 
         ${renderPipeline(trip.status)}
@@ -145,6 +147,7 @@
             <span>📅 ${formatDate(trip.date)}</span>
             <span>🕐 Return: ${formatDateTime(trip.returnTime)}</span>
             <span>👥 ${trip.students.length} students</span>
+            ${trip.transportMethod ? `<span>🚌 ${esc(transportLabel(trip.transportMethod))}</span>` : ''}
           </div>
           ${trip.adminNotes ? `<div class="alert alert-info" style="margin-top:.5rem"><strong>Notes:</strong> ${esc(trip.adminNotes)}</div>` : ''}
           <div class="route-card">
@@ -153,6 +156,9 @@
             <a href="${trip.routeSuggestion.mapUrl}" target="_blank" rel="noopener">View on Google Maps ↗</a>
           </div>
         </div>
+
+        ${renderTripDetails(trip)}
+        ${renderCounselorStatus(counselorStatus, tripId)}
 
         ${panels}
       </div>`;
@@ -212,11 +218,105 @@
       });
     });
 
+    // Bind copy counselor link
+    document.getElementById('copy-counselor-link')?.addEventListener('click', () => {
+      const input = document.getElementById('counselor-link-input');
+      navigator.clipboard.writeText(input.value).then(() => {
+        showToast('Counselor link copied!', 'success');
+      });
+    });
+
     // Bind checklist
     bindChecklist(trip);
 
     // Bind quote form
     bindQuoteForm(tripId);
+  }
+
+  function transportLabel(val) {
+    const map = {
+      chartered_bus: 'Chartered bus',
+      school_bus: 'School bus',
+      walking: 'Walking',
+      public_transit: 'Public transit',
+      parent_carpool: 'Parent carpool',
+      other: 'Other',
+    };
+    return map[val] || val;
+  }
+
+  function lunchLabel(val) {
+    const map = {
+      packed: 'Packed lunch from home',
+      school_provided: 'School cafeteria',
+      at_destination: 'Available at destination',
+      restaurant: 'Restaurant',
+      other: 'Other',
+    };
+    return map[val] || val;
+  }
+
+  function renderTripDetails(trip) {
+    const rows = [
+      trip.participants && ['Who will participate', esc(trip.participants)],
+      trip.learningObjectives && ['Learning objectives', esc(trip.learningObjectives).replace(/\n/g, '<br>')],
+      trip.otherClasses && ['Other classes joining', esc(trip.otherClasses)],
+      trip.multipleDestinations && ['Multiple destinations', trip.multipleDestinationsDetail ? esc(trip.multipleDestinationsDetail) : 'Yes'],
+      trip.specialEquipment && ['Special equipment', esc(trip.specialEquipment)],
+      trip.supervisorForNonGoing && ['Supervisor for non-going students', esc(trip.supervisorForNonGoing)],
+      trip.lunchOption && ['Lunch', lunchLabel(trip.lunchOption) + (trip.lunchDetails ? ' — ' + esc(trip.lunchDetails) : '')],
+    ].filter(Boolean);
+
+    if (!rows.length) return '';
+
+    return `
+      <div class="card" style="margin-bottom:1rem">
+        <div class="section-title">Trip Details</div>
+        <dl style="display:grid;grid-template-columns:max-content 1fr;gap:.4rem 1rem;font-size:.875rem;margin:0">
+          ${rows.map(([k, v]) => `
+            <dt style="font-weight:600;color:var(--gray-700);white-space:nowrap">${k}</dt>
+            <dd style="margin:0;color:var(--gray-800)">${v}</dd>`).join('')}
+        </dl>
+      </div>`;
+  }
+
+  function renderCounselorStatus(status, tripId) {
+    if (!status) return '';
+    const link = `${location.origin}/trips/${tripId}/counselor`;
+    const allSigned = status.signed === status.total;
+
+    const rows = status.students.map(s => `
+      <tr>
+        <td>${esc(s.studentName)}</td>
+        <td>${s.signed
+          ? `${esc(s.counselorName)}${s.counselorTitle ? ` <span style="color:var(--gray-500);font-size:.8rem">(${esc(s.counselorTitle)})</span>` : ''}`
+          : '—'}</td>
+        <td>${s.signed ? `<span class="badge badge-signed">Signed</span>` : `<span class="badge badge-unsigned">Pending</span>`}</td>
+        <td>${s.signedAt ? formatDate(s.signedAt) : '—'}</td>
+      </tr>`).join('');
+
+    return `
+      <div class="card" style="margin-bottom:1rem">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem;flex-wrap:wrap;gap:.5rem;">
+          <div class="section-title" style="margin:0">Counselor Approvals</div>
+          <div style="font-size:.875rem;color:var(--gray-600);">
+            <span style="color:var(--success);font-weight:600">${status.signed} signed</span>
+            · ${status.unsigned} unsigned · ${status.total} total
+          </div>
+        </div>
+        <div style="overflow-x:auto;">
+          <table class="perm-table">
+            <thead><tr><th>Student</th><th>Counselor</th><th>Status</th><th>Date</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        ${!allSigned ? `
+        <div style="margin-top:.75rem;display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;">
+          <span style="font-size:.8rem;color:var(--gray-600);">Share with counselor:</span>
+          <input class="form-control" style="flex:1;min-width:0;font-size:.8rem;" value="${link}" readonly id="counselor-link-input">
+          <button class="btn btn-outline btn-sm" id="copy-counselor-link">Copy Link</button>
+        </div>` : ''}
+      </div>`;
   }
 
   function renderChecklist(trip) {
@@ -389,7 +489,13 @@
   }
 
   function renderPermissionStatus(status, tripId) {
-    const rows = status.students.map(s => `
+    const rows = status.students.map(s => {
+      const medInfo = [
+        s.allergies && `Allergies: ${esc(s.allergies)}`,
+        s.medicalConditions && `Medical: ${esc(s.medicalConditions)}`,
+        s.dietaryRestrictions && `Dietary: ${esc(s.dietaryRestrictions)}`,
+      ].filter(Boolean).join(' · ');
+      return `
       <tr>
         <td>${esc(s.studentName)}</td>
         <td>${esc(s.parentEmail)}</td>
@@ -401,7 +507,9 @@
         <td>
           ${s.chaperoneOptIn ? `<span class="badge badge-chaperone">Chaperone</span>` : '—'}
         </td>
-      </tr>`).join('');
+        <td style="font-size:.8rem;color:var(--gray-600)">${medInfo || '—'}</td>
+      </tr>`;
+    }).join('');
 
     return `
       <div class="card" style="margin-bottom:1rem">
@@ -420,6 +528,7 @@
                 <th>Parent Email</th>
                 <th>Status</th>
                 <th>Chaperone</th>
+                <th>Allergies / Medical</th>
               </tr>
             </thead>
             <tbody>${rows}</tbody>

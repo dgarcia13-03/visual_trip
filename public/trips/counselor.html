@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Counselor Approval — Visual Trip</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="app">
+  <div class="loading-wrap"><div class="spinner"></div></div>
+</div>
+<script type="module">
+  import { getAuth, renderNavbar, apiFetch, showToast, formatDate, formatDateTime, getIdFromPath } from '/app.js';
+
+  const auth = getAuth();
+  const tripId = getIdFromPath(1);
+  const app = document.getElementById('app');
+
+  if (auth) renderNavbar(app);
+
+  const main = document.createElement('div');
+  app.appendChild(main);
+
+  function esc(s) {
+    return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  async function fetchJSON(url) {
+    if (auth) return apiFetch(url);
+    const res = await fetch(url);
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.error || 'Request failed');
+    return json.data;
+  }
+
+  let sigCanvas, sigCtx, drawing = false, hasSig = false;
+
+  async function loadPage() {
+    let trip, students;
+    try {
+      [trip, students] = await Promise.all([
+        fetchJSON(`/api/trips/${tripId}`),
+        fetchJSON(`/api/trips/${tripId}/students`),
+      ]);
+    } catch {
+      main.innerHTML = `<div class="page-wrap"><div class="alert alert-danger">Trip not found or access denied.</div></div>`;
+      return;
+    }
+
+    document.title = `Counselor Approval: ${trip.title} — Visual Trip`;
+
+    const studentOptions = students.map(s =>
+      `<option value="${s.id}">${esc(s.name)}</option>`
+    ).join('');
+
+    main.innerHTML = `
+      <div class="page-wrap" style="max-width:580px">
+        <div class="card" style="margin-bottom:1rem">
+          <div class="card-title" style="font-size:1.15rem">🎒 ${esc(trip.title)}</div>
+          <div class="trip-meta" style="margin-top:.5rem">
+            <span>📍 ${esc(trip.destination)}</span>
+            <span>📅 ${formatDate(trip.date)}</span>
+            <span>🕐 Return: ${formatDateTime(trip.returnTime)}</span>
+            <span>👥 ${trip.students.length} students</span>
+          </div>
+          ${trip.learningObjectives ? `
+          <div style="margin-top:.75rem;font-size:.875rem;">
+            <strong>Learning objectives:</strong>
+            <p style="margin:.25rem 0 0;color:var(--gray-700)">${esc(trip.learningObjectives)}</p>
+          </div>` : ''}
+        </div>
+
+        <div class="card">
+          <div class="section-title">Counselor Sign-Off</div>
+          <p style="font-size:.875rem;color:var(--gray-600);margin-bottom:1rem;">
+            Your signature confirms this field trip has been reviewed for the selected student.
+          </p>
+          <form id="counselor-form">
+            <div class="form-group">
+              <label class="form-label" for="student-id">Student</label>
+              <select class="form-control" id="student-id" required>
+                <option value="">— Select a student —</option>
+                ${studentOptions}
+              </select>
+              <div id="already-signed" class="alert alert-success" style="display:none;margin-top:.5rem;"></div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="counselor-name">Counselor Name</label>
+              <input class="form-control" id="counselor-name" type="text" required placeholder="Your full name"
+                value="${auth?.name || ''}">
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Signature</label>
+              <div class="sig-wrap" id="sig-wrap">
+                <canvas id="sig-canvas" width="540" height="160"></canvas>
+                <div class="sig-hint" id="sig-hint">Sign here with mouse or finger</div>
+              </div>
+              <div style="display:flex;gap:.5rem;margin-top:.4rem;">
+                <button type="button" class="btn btn-outline btn-sm" id="clear-sig">Clear</button>
+              </div>
+            </div>
+
+            <div id="counselor-error" class="alert alert-danger" style="display:none;"></div>
+            <div id="counselor-success" class="alert alert-success" style="display:none;"></div>
+
+            <button class="btn btn-primary btn-full" type="submit" id="counselor-submit">Submit Approval</button>
+          </form>
+        </div>
+      </div>`;
+
+    initSignaturePad();
+    bindStudentChange(tripId);
+    bindForm(tripId);
+  }
+
+  function initSignaturePad() {
+    sigCanvas = document.getElementById('sig-canvas');
+    sigCtx = sigCanvas.getContext('2d');
+
+    const wrap = document.getElementById('sig-wrap');
+    const dpr = window.devicePixelRatio || 1;
+    const w = wrap.clientWidth;
+    sigCanvas.width = w * dpr;
+    sigCanvas.height = 160 * dpr;
+    sigCanvas.style.width = w + 'px';
+    sigCanvas.style.height = '160px';
+    sigCtx.scale(dpr, dpr);
+
+    sigCtx.strokeStyle = '#1f2937';
+    sigCtx.lineWidth = 2;
+    sigCtx.lineCap = 'round';
+    sigCtx.lineJoin = 'round';
+
+    const getPos = (e) => {
+      const rect = sigCanvas.getBoundingClientRect();
+      const src = e.touches ? e.touches[0] : e;
+      return { x: src.clientX - rect.left, y: src.clientY - rect.top };
+    };
+
+    sigCanvas.addEventListener('mousedown', (e) => {
+      drawing = true;
+      const p = getPos(e);
+      sigCtx.beginPath();
+      sigCtx.moveTo(p.x, p.y);
+    });
+    sigCanvas.addEventListener('mousemove', (e) => {
+      if (!drawing) return;
+      const p = getPos(e);
+      sigCtx.lineTo(p.x, p.y);
+      sigCtx.stroke();
+      hasSig = true;
+      document.getElementById('sig-hint').style.display = 'none';
+    });
+    sigCanvas.addEventListener('mouseup', () => { drawing = false; });
+    sigCanvas.addEventListener('mouseleave', () => { drawing = false; });
+
+    sigCanvas.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      drawing = true;
+      const p = getPos(e);
+      sigCtx.beginPath();
+      sigCtx.moveTo(p.x, p.y);
+    }, { passive: false });
+    sigCanvas.addEventListener('touchmove', (e) => {
+      e.preventDefault();
+      if (!drawing) return;
+      const p = getPos(e);
+      sigCtx.lineTo(p.x, p.y);
+      sigCtx.stroke();
+      hasSig = true;
+      document.getElementById('sig-hint').style.display = 'none';
+    }, { passive: false });
+    sigCanvas.addEventListener('touchend', () => { drawing = false; });
+
+    document.getElementById('clear-sig').addEventListener('click', () => {
+      sigCtx.clearRect(0, 0, sigCanvas.width, sigCanvas.height);
+      hasSig = false;
+      document.getElementById('sig-hint').style.display = '';
+    });
+  }
+
+  async function bindStudentChange(tripId) {
+    let statusCache = null;
+    try {
+      statusCache = await fetchJSON(`/api/trips/${tripId}/counselor-signatures/status`);
+    } catch { /* status is optional */ }
+
+    document.getElementById('student-id').addEventListener('change', (e) => {
+      const studentId = e.target.value;
+      const notice = document.getElementById('already-signed');
+      if (!statusCache || !studentId) { notice.style.display = 'none'; return; }
+      const s = statusCache.students.find(x => x.studentId === studentId);
+      if (s?.signed) {
+        notice.textContent = `Already signed by ${s.counselorName} on ${new Date(s.signedAt).toLocaleDateString()}. Submitting again will overwrite.`;
+        notice.style.display = 'block';
+      } else {
+        notice.style.display = 'none';
+      }
+    });
+  }
+
+  function bindForm(tripId) {
+    document.getElementById('counselor-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errEl = document.getElementById('counselor-error');
+      const successEl = document.getElementById('counselor-success');
+      const btn = document.getElementById('counselor-submit');
+      errEl.style.display = 'none';
+
+      if (!hasSig) {
+        errEl.textContent = 'Please sign before submitting.';
+        errEl.style.display = 'block';
+        return;
+      }
+
+      btn.disabled = true; btn.textContent = 'Submitting…';
+
+      try {
+        const res = await fetch(`/api/trips/${tripId}/counselor-sign`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            studentId: document.getElementById('student-id').value,
+            counselorName: document.getElementById('counselor-name').value.trim(),
+            signatureDataUrl: sigCanvas.toDataURL('image/png'),
+          }),
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error);
+
+        const studentName = document.getElementById('student-id').selectedOptions[0]?.text || 'student';
+        successEl.textContent = `✅ Signed for ${studentName}. Select another student to continue.`;
+        successEl.style.display = 'block';
+        document.getElementById('already-signed').style.display = 'none';
+        document.getElementById('student-id').value = '';
+        sigCtx.clearRect(0, 0, sigCanvas.width, sigCanvas.height);
+        hasSig = false;
+        document.getElementById('sig-hint').style.display = '';
+        btn.disabled = false; btn.textContent = 'Submit Approval';
+        showToast(`Signed for ${studentName}!`, 'success');
+        setTimeout(() => { successEl.style.display = 'none'; }, 5000);
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.style.display = 'block';
+        btn.disabled = false; btn.textContent = 'Submit Approval';
+      }
+    });
+  }
+
+  await loadPage();
+</script>
+</body>
+</html>

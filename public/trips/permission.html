@@ -120,6 +120,21 @@
               </div>
             </div>
 
+            <div class="section-title" style="margin-top:.5rem">Allergies &amp; Medical Information</div>
+            <div class="form-hint" style="margin-bottom:.75rem;">This information will be shared with trip supervisors and kept confidential.</div>
+            <div class="form-group">
+              <label class="form-label" for="allergies">Allergies (optional)</label>
+              <input class="form-control" id="allergies" type="text" placeholder="e.g. peanuts, bee stings — leave blank if none">
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="medicalConditions">Medical conditions (optional)</label>
+              <input class="form-control" id="medicalConditions" type="text" placeholder="e.g. asthma, diabetes — leave blank if none">
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="dietaryRestrictions">Dietary restrictions (optional)</label>
+              <input class="form-control" id="dietaryRestrictions" type="text" placeholder="e.g. vegetarian, gluten-free — leave blank if none">
+            </div>
+
             <div class="form-group">
               <label style="display:flex;align-items:center;gap:.75rem;cursor:pointer;font-size:.9rem;">
                 <input type="checkbox" id="chaperone" style="width:18px;height:18px;accent-color:var(--primary);">
@@ -230,6 +245,9 @@
           parentEmail: document.getElementById('parent-email').value.trim(),
           signatureDataUrl,
           chaperoneOptIn: document.getElementById('chaperone').checked,
+          allergies: document.getElementById('allergies').value.trim(),
+          medicalConditions: document.getElementById('medicalConditions').value.trim(),
+          dietaryRestrictions: document.getElementById('dietaryRestrictions').value.trim(),
         };
 
         const fetchFn = auth

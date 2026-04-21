@@ -61,6 +61,7 @@ function seed() {
   if (existsSync(join(dataDir, 'users.json'))) return;
 
   const adminId = randomUUID();
+  const counselorId = randomUUID();
   const teacher1Id = randomUUID();
   const teacher2Id = randomUUID();
   const company1Id = randomUUID();
@@ -102,6 +103,16 @@ function seed() {
       email: 'admin@school.edu',
       passwordHash: hashPassword('admin123'),
       role: 'admin',
+      companyId: null,
+      studentIds: [],
+      createdAt: now,
+    },
+    {
+      id: counselorId,
+      name: 'Ms. Lopez',
+      email: 'counselor@school.edu',
+      passwordHash: hashPassword('counselor123'),
+      role: 'counselor',
       companyId: null,
       studentIds: [],
       createdAt: now,
@@ -222,6 +233,16 @@ function seed() {
       students: class1Students.map((s) => s.studentId),
       status: 'pending',
       adminNotes: '',
+      participants: 'All students in 3rd Grade Room 101',
+      learningObjectives: 'Students will explore exhibits on space, ecosystems, and human biology to reinforce current science curriculum.',
+      otherClasses: '',
+      transportMethod: 'chartered_bus',
+      multipleDestinations: false,
+      multipleDestinationsDetail: '',
+      specialEquipment: '',
+      supervisorForNonGoing: 'Ms. Chen will cover Room 101 during the trip.',
+      lunchOption: 'packed',
+      lunchDetails: 'Parents will pack a bag lunch. No food available for purchase on site.',
       checklist: [
         { item: 'Get admin approval', completed: false, custom: false },
         { item: 'Confirm bus booking', completed: false, custom: false },
@@ -245,9 +266,11 @@ function seed() {
   writeData('rosters.json', rosters);
   writeData('companies.json', companies);
   writeData('permissions.json', []);
+  writeData('counselor_signatures.json', []);
 
   console.log('✓ Seed data written to ./data/');
   console.log('  admin@school.edu / admin123');
+  console.log('  counselor@school.edu / counselor123');
   console.log('  teacher1@school.edu / teacher123');
   console.log('  teacher2@school.edu / teacher123');
   console.log('  bus1@citybusco.com / bus123');
@@ -266,6 +289,8 @@ app.get('/dashboard', page('dashboard.html'));
 app.get('/trips/new', page('trips/new.html'));
 app.get('/trips/:id', page('trips/detail.html'));
 app.get('/trips/:id/permission', page('trips/permission.html'));
+app.get('/trips/:id/counselor', page('trips/counselor.html'));
+app.get('/trips/:id/report', page('trips/report.html'));
 app.get('/admin/rosters', page('admin/rosters.html'));
 app.get('/admin/companies', page('admin/companies.html'));
 app.get('/signup', page('signup.html'));
@@ -362,7 +387,12 @@ app.get('/api/trips', requireRole(), (req, res) => {
 
 app.post('/api/trips', requireRole('teacher'), (req, res) => {
   try {
-    const { title, destination, date, returnTime, classId, notes } = req.body;
+    const {
+      title, destination, date, returnTime, classId, notes,
+      participants, learningObjectives, otherClasses,
+      transportMethod, multipleDestinations, multipleDestinationsDetail,
+      specialEquipment, supervisorForNonGoing, lunchOption, lunchDetails,
+    } = req.body;
     if (!title || !destination || !date || !returnTime || !classId)
       return res.status(400).json({ error: 'Missing required fields' });
 
@@ -386,6 +416,16 @@ app.post('/api/trips', requireRole('teacher'), (req, res) => {
       students: cls.students.map((s) => s.id),
       status: 'pending',
       adminNotes: notes || '',
+      participants: participants || '',
+      learningObjectives: learningObjectives || '',
+      otherClasses: otherClasses || '',
+      transportMethod: transportMethod || '',
+      multipleDestinations: Boolean(multipleDestinations),
+      multipleDestinationsDetail: multipleDestinationsDetail || '',
+      specialEquipment: specialEquipment || '',
+      supervisorForNonGoing: supervisorForNonGoing || '',
+      lunchOption: lunchOption || '',
+      lunchDetails: lunchDetails || '',
       checklist: [
         { item: 'Get admin approval', completed: false, custom: false },
         { item: 'Confirm bus booking', completed: false, custom: false },
@@ -520,6 +560,101 @@ app.patch('/api/trips/:id/checklist', requireRole('teacher'), (req, res) => {
     res.json({ data: trips[idx] });
   } catch {
     res.status(500).json({ error: 'Failed to update checklist' });
+  }
+});
+
+app.get('/api/trips/:id/students', (req, res) => {
+  try {
+    const trips = readData('trips.json');
+    const trip = trips.find((t) => t.id === req.params.id);
+    if (!trip) return res.status(404).json({ error: 'Trip not found' });
+    const rosters = readData('rosters.json');
+    const cls = rosters.find((r) => r.id === trip.classId);
+    res.json({ data: cls ? cls.students : [] });
+  } catch {
+    res.status(500).json({ error: 'Failed to load students' });
+  }
+});
+
+app.post('/api/trips/:id/counselor-sign', (req, res) => {
+  try {
+    const { studentId, counselorName, counselorTitle, counselorEmail, signatureDataUrl } = req.body;
+    if (!studentId || !counselorName || !signatureDataUrl)
+      return res.status(400).json({ error: 'studentId, counselorName, and signatureDataUrl are required' });
+
+    const trips = readData('trips.json');
+    const trip = trips.find((t) => t.id === req.params.id);
+    if (!trip) return res.status(404).json({ error: 'Trip not found' });
+
+    const sigs = existsSync(join(dataDir, 'counselor_signatures.json'))
+      ? readData('counselor_signatures.json')
+      : [];
+    const existing = sigs.findIndex(
+      (s) => s.tripId === req.params.id && s.studentId === studentId
+    );
+    const record = {
+      id: existing >= 0 ? sigs[existing].id : randomUUID(),
+      tripId: req.params.id,
+      studentId,
+      counselorName,
+      counselorTitle: counselorTitle || '',
+      counselorEmail: counselorEmail || '',
+      signatureDataUrl,
+      signedAt: new Date().toISOString(),
+    };
+    if (existing >= 0) sigs[existing] = record;
+    else sigs.push(record);
+    writeData('counselor_signatures.json', sigs);
+    res.json({ data: record });
+  } catch {
+    res.status(500).json({ error: 'Failed to save counselor signature' });
+  }
+});
+
+app.get('/api/trips/:id/counselor-signatures/status', requireRole(), (req, res) => {
+  try {
+    const trips = readData('trips.json');
+    const trip = trips.find((t) => t.id === req.params.id);
+    if (!trip) return res.status(404).json({ error: 'Trip not found' });
+
+    const rosters = readData('rosters.json');
+    const cls = rosters.find((r) => r.id === trip.classId);
+    const sigs = existsSync(join(dataDir, 'counselor_signatures.json'))
+      ? readData('counselor_signatures.json').filter((s) => s.tripId === req.params.id)
+      : [];
+
+    const students = cls ? cls.students : [];
+    const status = students.map((s) => {
+      const sig = sigs.find((x) => x.studentId === s.id);
+      return {
+        studentId: s.id,
+        studentName: s.name,
+        signed: !!sig,
+        counselorName: sig?.counselorName || '',
+        counselorTitle: sig?.counselorTitle || '',
+        signedAt: sig?.signedAt || null,
+      };
+    });
+
+    res.json({
+      data: {
+        total: students.length,
+        signed: status.filter((s) => s.signed).length,
+        unsigned: status.filter((s) => !s.signed).length,
+        students: status,
+      },
+    });
+  } catch {
+    res.status(500).json({ error: 'Failed to load counselor signature status' });
+  }
+});
+
+app.get('/api/users', requireRole('admin'), (req, res) => {
+  try {
+    const users = readData('users.json');
+    res.json({ data: users.map(({ passwordHash, ...u }) => u) });
+  } catch {
+    res.status(500).json({ error: 'Failed to load users' });
   }
 });
 
@@ -780,7 +915,10 @@ app.get('/api/trips/:id/permissions', requireRole(), (req, res) => {
 
 app.post('/api/trips/:id/permissions', (req, res) => {
   try {
-    const { studentId, parentName, parentEmail, signatureDataUrl, chaperoneOptIn } = req.body;
+    const {
+      studentId, parentName, parentEmail, signatureDataUrl, chaperoneOptIn,
+      allergies, medicalConditions, dietaryRestrictions,
+    } = req.body;
     if (!studentId || !parentName || !parentEmail || !signatureDataUrl)
       return res.status(400).json({ error: 'Missing required fields' });
 
@@ -801,6 +939,9 @@ app.post('/api/trips/:id/permissions', (req, res) => {
       parentEmail,
       signatureDataUrl,
       chaperoneOptIn: Boolean(chaperoneOptIn),
+      allergies: allergies || '',
+      medicalConditions: medicalConditions || '',
+      dietaryRestrictions: dietaryRestrictions || '',
       signedAt: new Date().toISOString(),
     };
 
@@ -846,6 +987,9 @@ app.get('/api/trips/:id/permissions/status', requireRole(), (req, res) => {
         signed: !!form,
         chaperoneOptIn: form?.chaperoneOptIn || false,
         signedAt: form?.signedAt || null,
+        allergies: form?.allergies || '',
+        medicalConditions: form?.medicalConditions || '',
+        dietaryRestrictions: form?.dietaryRestrictions || '',
       };
     });
 

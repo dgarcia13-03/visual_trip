@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Trip Report — Visual Trip</title>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    .report-section { margin-bottom: 1.5rem; }
+    .report-section h2 {
+      font-size: .85rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: var(--gray-500);
+      border-bottom: 1px solid var(--gray-200);
+      padding-bottom: .4rem;
+      margin: 0 0 .75rem;
+    }
+    .report-dl {
+      display: grid;
+      grid-template-columns: max-content 1fr;
+      gap: .35rem 1.25rem;
+      font-size: .875rem;
+      margin: 0;
+    }
+    .report-dl dt { font-weight: 600; color: var(--gray-700); white-space: nowrap; }
+    .report-dl dd { margin: 0; color: var(--gray-800); }
+    .report-table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+    .report-table th {
+      background: var(--gray-100);
+      font-weight: 600;
+      text-align: left;
+      padding: .4rem .6rem;
+      border: 1px solid var(--gray-200);
+      white-space: nowrap;
+    }
+    .report-table td {
+      padding: .4rem .6rem;
+      border: 1px solid var(--gray-200);
+      vertical-align: top;
+    }
+    .report-table tr:nth-child(even) td { background: var(--gray-50); }
+    .checklist-row { display: flex; align-items: center; gap: .5rem; font-size: .875rem; margin-bottom: .3rem; }
+    .checklist-row .check { font-size: 1rem; }
+    @media print {
+      .no-print { display: none !important; }
+      body { background: white; }
+      .page-wrap { max-width: 100% !important; padding: 0 !important; }
+      .card { box-shadow: none !important; border: 1px solid #ddd; }
+      a { color: inherit; text-decoration: none; }
+    }
+  </style>
+</head>
+<body>
+<div id="app">
+  <div class="loading-wrap"><div class="spinner"></div></div>
+</div>
+<script type="module">
+  import { requireAuth, renderNavbar, apiFetch, formatDate, formatDateTime, statusLabel, getIdFromPath } from '/app.js';
+
+  const auth = requireAuth('admin');
+  const tripId = getIdFromPath(1);
+  const app = document.getElementById('app');
+  renderNavbar(app);
+
+  const main = document.createElement('div');
+  app.appendChild(main);
+
+  function esc(s) {
+    return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  const TRANSPORT_LABELS = {
+    chartered_bus: 'Chartered bus', school_bus: 'School bus', walking: 'Walking',
+    public_transit: 'Public transit', parent_carpool: 'Parent carpool', other: 'Other',
+  };
+  const LUNCH_LABELS = {
+    packed: 'Packed lunch from home', school_provided: 'School cafeteria',
+    at_destination: 'Available at destination', restaurant: 'Restaurant', other: 'Other',
+  };
+
+  async function loadPage() {
+    const [trip, permStatus, counselorStatus, quotes, companies, rosters, users] = await Promise.all([
+      apiFetch(`/api/trips/${tripId}`),
+      apiFetch(`/api/trips/${tripId}/permissions/status`).catch(() => null),
+      apiFetch(`/api/trips/${tripId}/counselor-signatures/status`).catch(() => null),
+      apiFetch(`/api/trips/${tripId}/quotes`).catch(() => []),
+      apiFetch('/api/companies').catch(() => []),
+      apiFetch('/api/rosters').catch(() => []),
+      apiFetch('/api/users').catch(() => []),
+    ]);
+
+    const cls = rosters.find(r => r.id === trip.classId);
+    const teacher = users.find(u => u.id === trip.teacherId);
+    const companyMap = Object.fromEntries(companies.map(c => [c.id, c]));
+    const selectedQuote = quotes.find(q => q.id === trip.selectedQuoteId);
+
+    document.title = `Report: ${trip.title} — Visual Trip`;
+
+    main.innerHTML = `
+      <div class="page-wrap">
+
+        <!-- Controls -->
+        <div class="no-print" style="display:flex;align-items:center;gap:1rem;margin-bottom:1.5rem;flex-wrap:wrap;">
+          <a href="/trips/${tripId}" class="btn btn-outline btn-sm">← Back to Trip</a>
+          <h1 class="page-title" style="margin:0">Trip Report</h1>
+          <button class="btn btn-primary btn-sm" onclick="window.print()" style="margin-left:auto">🖨️ Print / Save PDF</button>
+        </div>
+
+        <div class="card">
+
+          <!-- Header -->
+          <div style="margin-bottom:1.5rem;padding-bottom:1rem;border-bottom:2px solid var(--gray-200);">
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:.5rem;">
+              <div>
+                <h1 style="font-size:1.4rem;margin:0 0 .25rem">${esc(trip.title)}</h1>
+                <div style="font-size:.875rem;color:var(--gray-500);">Generated ${new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' })}</div>
+              </div>
+              <span class="badge status-${trip.status}" style="font-size:.8rem">${statusLabel(trip.status)}</span>
+            </div>
+          </div>
+
+          <!-- Trip Overview -->
+          <div class="report-section">
+            <h2>Trip Overview</h2>
+            <dl class="report-dl">
+              <dt>Destination</dt><dd>${esc(trip.destination)}</dd>
+              <dt>Departure</dt><dd>${formatDateTime(trip.date)}</dd>
+              <dt>Return</dt><dd>${formatDateTime(trip.returnTime)}</dd>
+              <dt>Teacher</dt><dd>${esc(teacher?.name || trip.teacherId)}</dd>
+              <dt>Class</dt><dd>${esc(cls?.className || trip.classId)}</dd>
+              <dt>Students</dt><dd>${trip.students.length}</dd>
+              ${trip.transportMethod ? `<dt>Transport</dt><dd>${TRANSPORT_LABELS[trip.transportMethod] || esc(trip.transportMethod)}</dd>` : ''}
+              ${trip.multipleDestinations ? `<dt>Destinations</dt><dd>${trip.multipleDestinationsDetail ? esc(trip.multipleDestinationsDetail) : 'Multiple'}</dd>` : ''}
+              ${trip.adminNotes ? `<dt>Notes</dt><dd>${esc(trip.adminNotes)}</dd>` : ''}
+            </dl>
+          </div>
+
+          ${(trip.participants || trip.learningObjectives || trip.otherClasses) ? `
+          <!-- Educational Details -->
+          <div class="report-section">
+            <h2>Educational Details</h2>
+            <dl class="report-dl">
+              ${trip.participants ? `<dt>Who participates</dt><dd>${esc(trip.participants)}</dd>` : ''}
+              ${trip.learningObjectives ? `<dt>Learning objectives</dt><dd style="white-space:pre-wrap">${esc(trip.learningObjectives)}</dd>` : ''}
+              ${trip.otherClasses ? `<dt>Other classes joining</dt><dd>${esc(trip.otherClasses)}</dd>` : ''}
+            </dl>
+          </div>` : ''}
+
+          ${(trip.specialEquipment || trip.supervisorForNonGoing || trip.lunchOption) ? `
+          <!-- Logistics -->
+          <div class="report-section">
+            <h2>Logistics</h2>
+            <dl class="report-dl">
+              ${trip.specialEquipment ? `<dt>Special equipment</dt><dd>${esc(trip.specialEquipment)}</dd>` : ''}
+              ${trip.supervisorForNonGoing ? `<dt>Supervisor (non-going)</dt><dd>${esc(trip.supervisorForNonGoing)}</dd>` : ''}
+              ${trip.lunchOption ? `<dt>Lunch</dt><dd>${LUNCH_LABELS[trip.lunchOption] || esc(trip.lunchOption)}${trip.lunchDetails ? ' — ' + esc(trip.lunchDetails) : ''}</dd>` : ''}
+            </dl>
+          </div>` : ''}
+
+          <!-- Counselor Approvals -->
+          ${counselorStatus ? `
+          <div class="report-section">
+            <h2>Counselor Approvals — ${counselorStatus.signed} of ${counselorStatus.total} signed</h2>
+            <table class="report-table">
+              <thead><tr><th>Student</th><th>Counselor</th><th>Title</th><th>Date Signed</th><th>Status</th></tr></thead>
+              <tbody>
+                ${counselorStatus.students.map(s => `
+                <tr>
+                  <td>${esc(s.studentName)}</td>
+                  <td>${esc(s.counselorName) || '—'}</td>
+                  <td>${esc(s.counselorTitle) || '—'}</td>
+                  <td>${s.signedAt ? formatDate(s.signedAt) : '—'}</td>
+                  <td>${s.signed ? '<span class="badge badge-signed">Signed</span>' : '<span class="badge badge-unsigned">Pending</span>'}</td>
+                </tr>`).join('')}
+              </tbody>
+            </table>
+          </div>` : ''}
+
+          <!-- Permission Forms -->
+          ${permStatus ? `
+          <div class="report-section">
+            <h2>Permission Forms — ${permStatus.signed} of ${permStatus.total} signed</h2>
+            <table class="report-table">
+              <thead>
+                <tr>
+                  <th>Student</th><th>Parent Email</th><th>Status</th><th>Chaperone</th>
+                  <th>Allergies</th><th>Medical Conditions</th><th>Dietary Restrictions</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${permStatus.students.map(s => `
+                <tr>
+                  <td>${esc(s.studentName)}</td>
+                  <td>${esc(s.parentEmail)}</td>
+                  <td>${s.signed ? '<span class="badge badge-signed">Signed</span>' : '<span class="badge badge-unsigned">Unsigned</span>'}</td>
+                  <td>${s.chaperoneOptIn ? '<span class="badge badge-chaperone">Yes</span>' : '—'}</td>
+                  <td>${esc(s.allergies) || '—'}</td>
+                  <td>${esc(s.medicalConditions) || '—'}</td>
+                  <td>${esc(s.dietaryRestrictions) || '—'}</td>
+                </tr>`).join('')}
+              </tbody>
+            </table>
+          </div>` : ''}
+
+          <!-- Transportation Quote -->
+          ${selectedQuote ? `
+          <div class="report-section">
+            <h2>Selected Transportation Quote</h2>
+            <dl class="report-dl">
+              <dt>Company</dt><dd>${esc(companyMap[selectedQuote.companyId]?.name || 'Unknown')}</dd>
+              <dt>Total price</dt><dd>$${selectedQuote.price.toLocaleString()}</dd>
+              <dt>Buses</dt><dd>${selectedQuote.busCount} × ${selectedQuote.busCapacity} capacity</dd>
+              ${selectedQuote.notes ? `<dt>Notes</dt><dd>${esc(selectedQuote.notes)}</dd>` : ''}
+            </dl>
+          </div>` : quotes.length ? `
+          <div class="report-section">
+            <h2>Quotes Received (${quotes.length})</h2>
+            <table class="report-table">
+              <thead><tr><th>Company</th><th>Price</th><th>Buses</th><th>Capacity</th><th>Available</th><th>Notes</th></tr></thead>
+              <tbody>
+                ${quotes.map(q => `
+                <tr>
+                  <td>${esc(companyMap[q.companyId]?.name || 'Unknown')}</td>
+                  <td>$${q.price.toLocaleString()}</td>
+                  <td>${q.busCount}</td>
+                  <td>${q.busCapacity}</td>
+                  <td>${q.availability ? '✅ Yes' : '❌ No'}</td>
+                  <td>${esc(q.notes) || '—'}</td>
+                </tr>`).join('')}
+              </tbody>
+            </table>
+          </div>` : ''}
+
+          <!-- Planning Checklist -->
+          <div class="report-section">
+            <h2>Planning Checklist — ${trip.checklist.filter(i => i.completed).length} of ${trip.checklist.length} completed</h2>
+            ${trip.checklist.map(item => `
+              <div class="checklist-row">
+                <span class="check">${item.completed ? '✅' : '⬜'}</span>
+                <span style="${item.completed ? 'text-decoration:line-through;color:var(--gray-400)' : ''}">${esc(item.item)}</span>
+              </div>`).join('')}
+          </div>
+
+          <!-- Route -->
+          <div class="report-section">
+            <h2>Route</h2>
+            <dl class="report-dl">
+              <dt>Est. distance</dt><dd>${trip.routeSuggestion.distanceMiles} miles</dd>
+              <dt>Est. buses needed</dt><dd>${trip.routeSuggestion.estimatedBuses}</dd>
+              <dt>Map</dt><dd><a href="${trip.routeSuggestion.mapUrl}" target="_blank">${trip.routeSuggestion.mapUrl}</a></dd>
+            </dl>
+          </div>
+
+        </div>
+      </div>`;
+  }
+
+  try {
+    await loadPage();
+  } catch (err) {
+    main.innerHTML = `<div class="page-wrap"><div class="alert alert-danger">${err.message}</div></div>`;
+  }
+</script>
+</body>
+</html>

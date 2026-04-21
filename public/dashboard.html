@@ -147,10 +147,40 @@
     return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   }
 
+  async function loadCounselor() {
+    main.innerHTML = `
+      <div class="page-wrap">
+        <h1 class="page-title">Pending Counselor Sign-Offs</h1>
+        <div id="trips-list"><div class="loading-wrap"><div class="spinner"></div></div></div>
+      </div>`;
+
+    const trips = await apiFetch('/api/trips');
+    const el = document.getElementById('trips-list');
+
+    if (!trips.length) {
+      el.innerHTML = `<div class="empty-state"><div style="font-size:2.5rem">✅</div><p>No trips require your sign-off.</p></div>`;
+      return;
+    }
+
+    const sorted = [...trips].sort((a, b) => new Date(a.date) - new Date(b.date));
+    el.innerHTML = sorted.map(t => `
+      <div class="trip-row">
+        <div onclick="location.href='/trips/${t.id}'" style="cursor:pointer;flex:1">
+          <div class="trip-row-title">${esc(t.title)}</div>
+          <div class="trip-row-meta">${esc(t.destination)} · ${formatDate(t.date)} · ${t.students.length} students</div>
+        </div>
+        <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;">
+          <span class="badge ${statusClass(t.status)}">${statusLabel(t.status)}</span>
+          <a href="/trips/${t.id}/counselor" class="btn btn-sm btn-primary" onclick="event.stopPropagation()">Sign Off</a>
+        </div>
+      </div>`).join('');
+  }
+
   try {
     if (auth.role === 'teacher') await loadTeacher();
     else if (auth.role === 'admin') await loadAdmin();
     else if (auth.role === 'bus_company') await loadBusCompany();
+    else if (auth.role === 'counselor') await loadCounselor();
     else await loadParent();
   } catch (err) {
     main.innerHTML = `<div class="page-wrap"><div class="alert alert-danger">${err.message}</div></div>`;
